@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Graph - DAG Visualization</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            color: white;
+            overflow: hidden;
+            height: 100vh;
+            user-select: none;
+        }
+
+        .toolbar {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 10px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-1px);
+        }
+
+        .btn.active {
+            background: rgba(74, 144, 226, 0.3);
+            border-color: rgba(74, 144, 226, 0.5);
+        }
+
+        .canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            overflow: hidden;
+            background:
+                radial-gradient(circle at 25% 25%, rgba(74, 144, 226, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 75% 75%, rgba(156, 39, 176, 0.1) 0%, transparent 50%),
+                linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            background-attachment: fixed;
+        }
+
+        .infinite-canvas {
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+
+        .infinite-canvas.grabbing {
+            cursor: grabbing;
+        }
+
+        .infinite-canvas.connecting {
+            cursor: crosshair;
+        }
+
+        .grid-pattern {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.1;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px);
+            background-size: 50px 50px;
+            pointer-events: none;
+        }
+
+        .node {
+            cursor: pointer;
+        }
+
+        .node-circle {
+            fill: rgba(255, 255, 255, 0.05);
+            stroke: rgba(74, 144, 226, 0.6);
+            stroke-width: 2px;
+            filter: drop-shadow(0px 4px 8px rgba(0, 0, 0, 0.3));
+            transition: all 0.3s ease;
+        }
+
+        .node-circle:hover {
+            fill: rgba(74, 144, 226, 0.1);
+            stroke: rgba(74, 144, 226, 1);
+            stroke-width: 3px;
+            filter: drop-shadow(0px 6px 12px rgba(74, 144, 226, 0.4));
+        }
+
+        .node-circle.selected {
+            fill: rgba(74, 144, 226, 0.2);
+            stroke: rgba(74, 144, 226, 1);
+            stroke-width: 3px;
+            filter: drop-shadow(0px 0px 20px rgba(74, 144, 226, 0.6));
+        }
+
+        .node-label {
+            fill: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            text-anchor: middle;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .node-description {
+            fill: rgba(255, 255, 255, 0.7);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 10px;
+            text-anchor: middle;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+        }
+
+        @keyframes twinkle {
+            0%, 100% { opacity: 0.3; transform: scale(0.8); }
+            50% { opacity: 1; transform: scale(1.2); }
+        }
+
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .star {
+            animation: twinkle 2s ease-in-out infinite;
+        }
+
+        .star.rotating {
+            animation: twinkle 2s ease-in-out infinite, rotate 8s linear infinite;
+        }
+
+        .star.floating {
+            animation: twinkle 3s ease-in-out infinite, float 4s ease-in-out infinite;
+        }
+
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+
+        .task-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: white;
+            word-wrap: break-word;
+            flex: 1;
+        }
+
+        .task-actions {
+            display: flex;
+            gap: 4px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .task-node:hover .task-actions {
+            opacity: 1;
+        }
+
+        .action-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: white;
+            padding: 4px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.2s ease;
+        }
+
+        .action-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .task-description {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.7);
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+
+        .link {
+            stroke: rgba(74, 144, 226, 0.6);
+            stroke-width: 2px;
+            fill: none;
+            marker-end: url(#arrowhead);
+            transition: all 0.3s ease;
+        }
+
+        .link:hover {
+            stroke: rgba(74, 144, 226, 1);
+            stroke-width: 3px;
+            filter: drop-shadow(0px 0px 8px rgba(74, 144, 226, 0.4));
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            background: rgba(30, 30, 30, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            margin: 10% auto;
+            padding: 30px;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .modal-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            color: white;
+        }
+
+        .close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            color: rgba(255, 255, 255, 0.7);
+            transition: color 0.3s ease;
+        }
+
+        .close:hover {
+            color: white;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 14px;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: rgba(74, 144, 226, 0.6);
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+            font-family: inherit;
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 30px;
+        }
+
+        .status-indicator {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 10px 15px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .zoom-controls {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .zoom-btn {
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .zoom-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        @media (max-width: 768px) {
+            .toolbar {
+                flex-wrap: wrap;
+                max-width: calc(100vw - 40px);
+            }
+
+            .btn {
+                padding: 8px 12px;
+                font-size: 12px;
+            }
+
+            .task-node {
+                min-width: 120px;
+                max-width: 200px;
+                padding: 12px;
+            }
+
+            .modal-content {
+                width: 95%;
+                margin: 5% auto;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <button class="btn" onclick="centerView()">
+            🎯 Center View
+        </button>
+        <button class="btn" onclick="autoLayout()">
+            🔄 Auto Layout
+        </button>
+    </div>
+
+    <div class="zoom-controls">
+        <button class="zoom-btn" onclick="zoomIn()">+</button>
+        <button class="zoom-btn" onclick="zoomOut()">-</button>
+        <button class="zoom-btn" onclick="resetZoom()" style="font-size: 12px;">⌂</button>
+    </div>
+
+    <div class="canvas-container">
+        <div class="grid-pattern" id="grid"></div>
+        <svg class="infinite-canvas" id="svg-canvas">
+            <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7"
+                    refX="9" refY="3.5" orient="auto" fill="rgba(74, 144, 226, 0.6)">
+                    <polygon points="0 0, 10 3.5, 0 7" />
+                </marker>
+
+                <!-- Star shapes -->
+                <g id="star-4">
+                    <path d="M0,-8 L2,-2 L8,0 L2,2 L0,8 L-2,2 L-8,0 L-2,-2 Z" fill="white" opacity="0.8"/>
+                </g>
+
+                <g id="star-6">
+                    <path d="M0,-6 L1.5,-1.5 L6,0 L1.5,1.5 L0,6 L-1.5,1.5 L-6,0 L-1.5,-1.5 Z" fill="white" opacity="0.6"/>
+                </g>
+
+                <g id="sparkle">
+                    <path d="M0,-4 L1,-1 L4,0 L1,1 L0,4 L-1,1 L-4,0 L-1,-1 Z" fill="white" opacity="0.9"/>
+                </g>
+
+                <!-- Glow filters -->
+                <filter id="glow">
+                    <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                    <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+
+                <filter id="star-glow">
+                    <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+                    <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+            </defs>
+            <g id="stars-background"></g>
+            <g id="graph-container"></g>
+        </svg>
+    </div>
+
+    <div class="status-indicator" id="status">
+        📊 Tasks: <span id="task-count">0</span> | Connections: <span id="connection-count">0</span>
+    </div>
+
+
+    <script>
+        // Global state
+        let nodes = [];
+        let links = [];
+        let svg, g, simulation, node, link;
+        let width = window.innerWidth;
+        let height = window.innerHeight;
+        let selectedNode = null;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeD3();
+            loadData();
+        });
+
+        function initializeD3() {
+            // Setup SVG and zoom
+            svg = d3.select("#svg-canvas")
+                .attr("width", width)
+                .attr("height", height);
+
+            g = d3.select("#graph-container");
+
+            // Setup zoom behavior
+            const zoom = d3.zoom()
+                .scaleExtent([0.1, 3])
+                .on("zoom", function(event) {
+                    g.attr("transform", event.transform);
+                    d3.select("#stars-background").attr("transform", event.transform);
+                });
+
+            svg.call(zoom);
+
+            // Create background stars
+            createBackgroundStars();
+
+            // Handle window resize
+            window.addEventListener('resize', function() {
+                width = window.innerWidth;
+                height = window.innerHeight;
+                svg.attr("width", width).attr("height", height);
+                if (simulation) {
+                    simulation.force("center", d3.forceCenter(width / 2, height / 2));
+                    simulation.alpha(0.3).restart();
+                }
+                createBackgroundStars(); // Recreate stars on resize
+            });
+        }
+
+        function createBackgroundStars() {
+            const starsBg = d3.select("#stars-background");
+            starsBg.selectAll("*").remove(); // Clear existing stars
+
+            // Create random background stars
+            for (let i = 0; i < 50; i++) {
+                const x = Math.random() * (width + 400) - 200;
+                const y = Math.random() * (height + 400) - 200;
+                const starType = Math.random() < 0.5 ? "sparkle" : (Math.random() < 0.5 ? "star-4" : "star-6");
+                const animClass = Math.random() < 0.3 ? "rotating" : (Math.random() < 0.5 ? "floating" : "");
+
+                starsBg.append("use")
+                    .attr("href", `#${starType}`)
+                    .attr("x", x)
+                    .attr("y", y)
+                    .attr("class", `star ${animClass}`)
+                    .style("opacity", Math.random() * 0.6 + 0.2)
+                    .style("filter", "url(#star-glow)")
+                    .style("animation-delay", `${Math.random() * 4}s`);
+            }
+        }
+
+        async function loadData() {
+            try {
+                const [tasksResponse, connectionsResponse] = await Promise.all([
+                    fetch('/tasks'),
+                    fetch('/connections')
+                ]);
+
+                const tasks = await tasksResponse.json();
+                const connections = await connectionsResponse.json();
+
+                // Transform data for D3
+                nodes = tasks.map(task => ({
+                    id: task.id,
+                    name: task.name,
+                    description: task.description,
+                    x: task.x || width / 2 + Math.random() * 100 - 50,
+                    y: task.y || height / 2 + Math.random() * 100 - 50
+                }));
+
+                links = connections.map(conn => ({
+                    source: conn.parent_id,
+                    target: conn.child_id,
+                    id: conn.id
+                }));
+
+                renderGraph();
+                updateStatus();
+            } catch (error) {
+                console.error('Error loading data:', error);
+            }
+        }
+
+        function renderGraph() {
+            // Enhanced simulation for larger graphs with more space
+            simulation = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(links)
+                    .id(d => d.id)
+                    .distance(d => {
+                        // Increased link distances for more space
+                        const sourceDepth = getNodeDepth(d.source.id);
+                        const targetDepth = getNodeDepth(d.target.id);
+                        return sourceDepth === targetDepth ? 180 : 250;
+                    })
+                )
+                .force("charge", d3.forceManyBody()
+                    .strength(d => {
+                        // Stronger repulsion for more spread
+                        return isMainCategory(d.id) ? -2500 : -1200;
+                    })
+                )
+                .force("center", d3.forceCenter(width / 2, height / 2).strength(0.05))
+                .force("collision", d3.forceCollide()
+                    .radius(d => isMainCategory(d.id) ? 80 : 65)
+                )
+                // Weaker Y-force to allow more natural positioning
+                .force("y", d3.forceY()
+                    .y(d => getNodeDepth(d.id) * 300 + 150)
+                    .strength(0.05)
+                );
+
+            // Create links with enhanced styling
+            link = g.append("g")
+                .attr("class", "links")
+                .selectAll(".link")
+                .data(links)
+                .enter().append("line")
+                .attr("class", "link")
+                .attr("stroke-width", d => {
+                    // Thicker lines for main connections
+                    return isMainConnection(d) ? 3 : 2;
+                })
+                .attr("opacity", 0.6);
+
+            // Create node groups
+            const nodeGroup = g.append("g")
+                .attr("class", "nodes")
+                .selectAll(".node")
+                .data(nodes)
+                .enter().append("g")
+                .attr("class", "node")
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+
+            // Add circles to nodes with variable sizes
+            nodeGroup.append("circle")
+                .attr("class", "node-circle")
+                .attr("r", d => isMainCategory(d.id) ? 55 : 40)
+                .attr("fill", d => getNodeColor(d.id))
+                .attr("stroke", d => d3.rgb(getNodeColor(d.id)).darker(0.5))
+                .attr("stroke-width", 2)
+                .on("click", function(event, d) {
+                    // Handle node selection with highlighting
+                    d3.selectAll(".node-circle").classed("selected", false);
+                    d3.select(this).classed("selected", true);
+                    highlightConnectedNodes(d.id);
+                    selectedNode = d;
+                    // Add sparkle effect on click
+                    createNodeSparkles(d.x, d.y);
+                })
+                .on("mouseover", function(event, d) {
+                    // Show tooltip on hover
+                    showTooltip(event, d);
+                    // Add subtle sparkle on hover
+                    if (Math.random() < 0.3) {
+                        createNodeSparkles(d.x, d.y, 3);
+                    }
+                })
+                .on("mouseout", function() {
+                    hideTooltip();
+                });
+
+            // Add main labels with better truncation
+            nodeGroup.append("text")
+                .attr("class", "node-label")
+                .attr("dy", "-0.3em")
+                .attr("font-size", d => isMainCategory(d.id) ? "12px" : "11px")
+                .attr("font-weight", d => isMainCategory(d.id) ? "bold" : "600")
+                .text(d => {
+                    // More generous truncation limits
+                    const maxLen = isMainCategory(d.id) ? 18 : 14;
+                    return d.name.length > maxLen ? d.name.substring(0, maxLen) + "..." : d.name;
+                });
+
+            // Add description labels with better truncation
+            nodeGroup.append("text")
+                .attr("class", "node-description")
+                .attr("dy", "1em")
+                .attr("font-size", "9px")
+                .text(d => {
+                    if (!d.description) return "";
+                    const maxLen = isMainCategory(d.id) ? 25 : 20;
+                    return d.description.length > maxLen ? d.description.substring(0, maxLen) + "..." : d.description;
+                });
+
+            // Store node reference globally
+            node = nodeGroup;
+
+            // Enhanced tick function with unrestricted movement
+            simulation.on("tick", function() {
+                // Update link positions
+                link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+
+                // Update node positions without boundaries - let them flow naturally
+                node
+                    .attr("transform", d => `translate(${d.x},${d.y})`);
+            });
+
+            // Longer simulation for better layout
+            setTimeout(() => {
+                if (simulation) {
+                    simulation.alphaTarget(0.01);
+                }
+            }, 8000);
+
+            setTimeout(() => {
+                if (simulation) {
+                    simulation.stop();
+                }
+                // Start periodic sparkles after layout settles
+                startPeriodicSparkles();
+            }, 12000);
+        }
+
+        // Helper functions for enhanced visualization
+        function isMainCategory(nodeId) {
+            return nodeId <= 22; // Main category nodes
+        }
+
+        function getNodeDepth(nodeId) {
+            if (nodeId === 1) return 0; // Wake Word Detection (root)
+            if (nodeId <= 3) return 1;  // Voice, Face Recognition
+            if (nodeId === 4) return 2; // General AI (central hub)
+            if (nodeId <= 22) return 3; // Other main categories
+            return 4; // Sub-components
+        }
+
+        function getNodeColor(nodeId) {
+            const colors = {
+                1: '#FF6B6B',    // Wake Word - Red
+                2: '#4ECDC4',    // Voice - Teal
+                3: '#45B7D1',    // Face - Blue
+                4: '#96CEB4',    // AI - Green
+                5: '#FECA57',    // Social - Yellow
+                6: '#FF9FF3',    // Smart Home - Pink
+                7: '#54A0FF',    // Task Automation - Light Blue
+                8: '#5F27CD',    // Web Scraping - Purple
+                9: '#00D2D3',    // Security - Cyan
+                10: '#FF9F43',   // Personalization - Orange
+                11: '#EE5A24',   // Communication - Orange Red
+                12: '#009432',   // Storage - Dark Green
+                13: '#006BA6',   // Health - Dark Blue
+                14: '#8B5CF6',   // System Monitor - Purple
+                15: '#F59E0B',   // Analytics - Amber
+                16: '#6B7280',   // Offline - Gray
+                17: '#EC4899',   // Emotional - Pink
+                18: '#8B5CF6',   // Creativity - Purple
+                19: '#10B981',   // Social Interaction - Emerald
+                20: '#3B82F6',   // Life Management - Blue
+                21: '#F59E0B',   // Memory - Amber
+                22: '#EF4444'    // Entertainment - Red
+            };
+            return colors[Math.min(nodeId, 22)] || '#94A3B8'; // Default gray for sub-components
+        }
+
+        function isMainConnection(link) {
+            return link.source.id <= 22 && link.target.id <= 22;
+        }
+
+        function highlightConnectedNodes(nodeId) {
+            // Reset all nodes
+            d3.selectAll(".node-circle").attr("opacity", 0.3);
+            d3.selectAll(".link").attr("opacity", 0.1);
+
+            // Highlight selected node
+            d3.select(`.node circle[r]`).filter(d => d.id === nodeId).attr("opacity", 1);
+
+            // Highlight connected nodes and links
+            links.forEach(link => {
+                if (link.source.id === nodeId || link.target.id === nodeId) {
+                    d3.selectAll(".link").filter(d => d.id === link.id).attr("opacity", 0.8);
+                    d3.selectAll(".node-circle").filter(d => d.id === link.source.id || d.id === link.target.id).attr("opacity", 1);
+                }
+            });
+
+            // Reset after 3 seconds
+            setTimeout(() => {
+                d3.selectAll(".node-circle").attr("opacity", 1);
+                d3.selectAll(".link").attr("opacity", 0.6);
+            }, 3000);
+        }
+
+        function showTooltip(event, d) {
+            // Simple tooltip implementation
+            const tooltip = d3.select("body").append("div")
+                .attr("class", "tooltip")
+                .style("position", "absolute")
+                .style("background", "rgba(0,0,0,0.8)")
+                .style("color", "white")
+                .style("padding", "8px")
+                .style("border-radius", "4px")
+                .style("font-size", "12px")
+                .style("pointer-events", "none")
+                .style("z-index", "1000");
+
+            tooltip.html(`<strong>${d.name}</strong><br/>${d.description}`)
+                .style("left", (event.pageX + 10) + "px")
+                .style("top", (event.pageY - 10) + "px");
+        }
+
+        function hideTooltip() {
+            d3.selectAll(".tooltip").remove();
+        }
+
+        function createNodeSparkles(x, y, count = 6) {
+            for (let i = 0; i < count; i++) {
+                const angle = (i / count) * 2 * Math.PI;
+                const distance = 60 + Math.random() * 20;
+                const sparkleX = x + Math.cos(angle) * distance;
+                const sparkleY = y + Math.sin(angle) * distance;
+
+                const sparkle = g.append("use")
+                    .attr("href", "#sparkle")
+                    .attr("x", sparkleX)
+                    .attr("y", sparkleY)
+                    .attr("class", "star")
+                    .style("opacity", 0)
+                    .style("filter", "url(#star-glow)")
+                    .style("animation", `twinkle 0.8s ease-out ${i * 0.1}s`);
+
+                // Animate sparkle appearance and removal
+                sparkle.transition()
+                    .duration(200)
+                    .style("opacity", 1)
+                    .transition()
+                    .delay(600)
+                    .duration(400)
+                    .style("opacity", 0)
+                    .remove();
+            }
+        }
+
+        function createConnectionSparkle() {
+            // Add sparkles along connection lines occasionally
+            if (Math.random() < 0.1) { // 10% chance
+                d3.selectAll(".link").each(function(d) {
+                    const line = d3.select(this);
+                    const x1 = parseFloat(line.attr("x1"));
+                    const y1 = parseFloat(line.attr("y1"));
+                    const x2 = parseFloat(line.attr("x2"));
+                    const y2 = parseFloat(line.attr("y2"));
+
+                    // Random point along the line
+                    const t = Math.random();
+                    const sparkleX = x1 + t * (x2 - x1);
+                    const sparkleY = y1 + t * (y2 - y1);
+
+                    const sparkle = g.append("use")
+                        .attr("href", "#sparkle")
+                        .attr("x", sparkleX)
+                        .attr("y", sparkleY)
+                        .attr("class", "star floating")
+                        .style("opacity", 0.6)
+                        .style("filter", "url(#star-glow)");
+
+                    sparkle.transition()
+                        .delay(Math.random() * 2000)
+                        .duration(1000)
+                        .style("opacity", 0)
+                        .remove();
+                });
+            }
+        }
+
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+
+        function centerView() {
+            if (!nodes || nodes.length === 0) return;
+
+            // Calculate bounds of all nodes
+            const bounds = nodes.reduce((acc, node) => ({
+                minX: Math.min(acc.minX, node.x),
+                minY: Math.min(acc.minY, node.y),
+                maxX: Math.max(acc.maxX, node.x),
+                maxY: Math.max(acc.maxY, node.y)
+            }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+
+            const centerX = (bounds.minX + bounds.maxX) / 2;
+            const centerY = (bounds.minY + bounds.maxY) / 2;
+
+            // Calculate scale to fit all nodes
+            const scale = Math.min(
+                width / (bounds.maxX - bounds.minX + 200),
+                height / (bounds.maxY - bounds.minY + 200)
+            );
+
+            const transform = d3.zoomIdentity
+                .translate(width / 2 - centerX * scale, height / 2 - centerY * scale)
+                .scale(Math.min(scale, 1));
+
+            svg.transition()
+                .duration(1000)
+                .call(d3.zoom().transform, transform);
+        }
+
+        function autoLayout() {
+            if (simulation) {
+                // Add sparkle burst effect
+                nodes.forEach(node => {
+                    if (Math.random() < 0.3) {
+                        createNodeSparkles(node.x, node.y, 3);
+                    }
+                });
+
+                // Restart simulation with more force
+                simulation
+                    .force("charge", d3.forceManyBody().strength(-1200))
+                    .alpha(1)
+                    .restart();
+
+                // Reset to original charge after animation
+                setTimeout(() => {
+                    simulation.force("charge", d3.forceManyBody().strength(-800));
+                }, 2000);
+            }
+        }
+
+        function startPeriodicSparkles() {
+            setInterval(() => {
+                createConnectionSparkle();
+
+                // Occasionally sparkle a random node
+                if (Math.random() < 0.15 && nodes.length > 0) {
+                    const randomNode = nodes[Math.floor(Math.random() * nodes.length)];
+                    createNodeSparkles(randomNode.x, randomNode.y, 2);
+                }
+            }, 3000);
+        }
+
+        function zoomIn() {
+            svg.transition().duration(300).call(
+                d3.zoom().scaleBy, 1.2
+            );
+        }
+
+        function zoomOut() {
+            svg.transition().duration(300).call(
+                d3.zoom().scaleBy, 0.8
+            );
+        }
+
+        function resetZoom() {
+            svg.transition().duration(500).call(
+                d3.zoom().transform,
+                d3.zoomIdentity
+            );
+        }
+
+        function updateStatus() {
+            document.getElementById('task-count').textContent = nodes.length;
+            document.getElementById('connection-count').textContent = links.length;
+        }
+    </script>
+</body>
+</html>
